@@ -1,0 +1,131 @@
+#| This Dockerfile provides a starting point for a ROCm installation of math & DL libs.
+FROM rocm/dev-ubuntu-18.04:latest 
+
+MAINTAINER Peng Sun <peng.sun@amd.com>
+
+ARG DEB_ROCM_REPO=http://repo.radeon.com/rocm/apt/debian/
+ARG ROCM_PATH=/opt/rocm
+
+ENV DEBIAN_FRONTEND noninteractive
+ENV HOME /root/ 
+RUN apt update && apt install -y wget software-properties-common 
+
+# Install misc pkgs
+RUN apt-get update --allow-insecure-repositories && DEBIAN_FRONTEND=noninteractive apt-get install -y \
+  build-essential \
+  cmake \
+  cmake-qt-gui \
+  ssh \
+  curl \
+  vim \
+  apt-utils \
+  pkg-config \
+  g++-multilib \
+  git \
+  libunwind-dev \
+  libfftw3-dev \
+  libelf-dev \
+  libncurses5-dev \
+  libpthread-stubs0-dev \
+  gfortran \
+  libboost-program-options-dev \
+  libssl-dev \
+  libboost-dev \
+  libboost-system-dev \
+  libboost-filesystem-dev \
+  libnuma-dev \
+  libfreetype6-dev \
+  libhdf5-serial-dev \
+  libzmq3-dev \
+  libpng-dev \
+  pkg-config \
+  software-properties-common \
+  unzip \
+  lsb-core \  
+  wget && \
+  apt-get clean && \
+  rm -rf /var/lib/apt/lists/*
+
+# Install rocm pkgs
+RUN apt-get update --allow-insecure-repositories && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --allow-unauthenticated \
+    rocm-dev rocm-libs rocm-utils \
+    rocfft miopen-hip miopengemm rocblas hipblas rocrand rccl && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+ENV HCC_HOME=$ROCM_PATH/hcc
+ENV HIP_PATH=$ROCM_PATH/hip
+ENV OPENCL_ROOT=$ROCM_PATH/opencl
+ENV PATH="$HCC_HOME/bin:$HIP_PATH/bin:${PATH}"
+ENV PATH="$ROCM_PATH/bin:${PATH}"
+ENV PATH="$OPENCL_ROOT/bin:${PATH}"
+RUN bash -c 'echo -e "gfx803\ngfx900\ngfx906\ngfx908" >> /opt/rocm/bin/target.lst'
+
+# Setup environment variables, and add those environment variables at the end of ~/.bashrc 
+ARG HCC_HOME=/opt/rocm/hcc
+ARG HIP_PATH=/opt/rocm/hip
+ARG PATH=$HCC_HOME/bin:$HIP_PATH/bin:$PATH
+
+# Install required python packages
+RUN apt-get update --allow-insecure-repositories && DEBIAN_FRONTEND=noninteractive apt-get install -y \
+    python-dev \
+    python-pip \
+    python-wheel \
+    python3-dev \
+    python3-pip \
+    python3-wheel && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+RUN pip3 install pip enum34 numpy mock setuptools --upgrade
+RUN pip3 install keras_preprocessing --upgrade
+RUN pip3 install setuptools --upgrade
+RUN pip3 install keras_applications
+RUN pip3 install jupyter 
+
+# Fetch tensorflow-rocm CSB build and install
+RUN cd ~ && wget http://ml-ci.amd.com:21096/job/tensorflow-rocm-release/lastSuccessfulBuild/artifact/pip36_test/whl/tensorflow_rocm-1.14.0-cp36-cp36m-manylinux1_x86_64.whl && pip3 install tensorflow_rocm*.whl 
+
+WORKDIR $HOME
+
+# See http://bugs.python.org/issue19846
+ENV LANG C.UTF-8
+
+# Add google-cloud-sdk to the source list
+RUN echo "deb http://packages.cloud.google.com/apt cloud-sdk-$(lsb_release -c -s) main" | tee -a /etc/apt/sources.list.d/google-cloud-sdk.list
+RUN curl https://packages.cloud.google.com/apt/doc/apt-key.gpg | apt-key add -
+
+# Install extras needed by most models
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      git \
+      ca-certificates \
+      wget \
+      htop \
+      zip \
+      google-cloud-sdk
+
+# Install / update Python and Python3
+RUN apt-get install -y --no-install-recommends \
+      python3 \
+      python3-dev \
+      python3-pip \
+      python3-setuptools \
+      python3-venv
+
+
+# Upgrade pip, need to use pip3 and then pip after this or an error
+# is thrown for no main found.
+RUN pip3 install --upgrade pip
+# setuptools upgraded to fix install requirements from model garden.
+RUN pip install wheel
+RUN pip install --upgrade setuptools google-api-python-client pyyaml google-cloud google-cloud-bigquery mock
+RUN pip install absl-py
+#RUN pip install --upgrade --force-reinstall ${tensorflow_pip_spec} ${extra_pip_specs}
+RUN pip install tfds-nightly
+RUN pip install -U scikit-learn
+
+RUN curl https://raw.githubusercontent.com/tensorflow/models/master/official/requirements.txt > /tmp/requirements.txt
+RUN pip install -r /tmp/requirements.txt
+
+RUN pip freeze
+
