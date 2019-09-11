@@ -1,6 +1,5 @@
 #| This Dockerfile provides a starting point for a ROCm installation of math & DL libs.
-FROM rocm/dev-ubuntu-18.04:latest 
-
+FROM rocm/dev-ubuntu-16.04:2.7 
 MAINTAINER Peng Sun <peng.sun@amd.com>
 
 ARG DEB_ROCM_REPO=http://repo.radeon.com/rocm/apt/debian/
@@ -83,11 +82,11 @@ RUN pip3 install setuptools --upgrade
 RUN pip3 install keras_applications
 RUN pip3 install jupyter 
 
-# Fetch tensorflow-rocm CSB build and install
-RUN cd ~ && wget http://ml-ci.amd.com:21096/job/tensorflow-rocm-release/lastSuccessfulBuild/artifact/pip36_test/whl/tensorflow_rocm-1.14.0-cp36-cp36m-manylinux1_x86_64.whl && pip3 install tensorflow_rocm*.whl 
+# Fetch tensorflow-rocm release or CSB build and install
+# RUN cd ~ && wget http://ml-ci.amd.com:21096/job/tensorflow-rocm-release/lastSuccessfulBuild/artifact/pip36_test/whl/tensorflow_rocm-1.14.0-cp36-cp36m-manylinux1_x86_64.whl && pip3 install tensorflow_rocm*.whl 
+RUN pip3 install tensorflow-rocm
 
-WORKDIR $HOME
-
+# Add configurations from the other perfzero Dockerfiles
 # See http://bugs.python.org/issue19846
 ENV LANG C.UTF-8
 
@@ -112,7 +111,6 @@ RUN apt-get install -y --no-install-recommends \
       python3-setuptools \
       python3-venv
 
-
 # Upgrade pip, need to use pip3 and then pip after this or an error
 # is thrown for no main found.
 RUN pip3 install --upgrade pip
@@ -129,3 +127,4 @@ RUN pip install -r /tmp/requirements.txt
 
 RUN pip freeze
 
+WORKDIR $HOME
