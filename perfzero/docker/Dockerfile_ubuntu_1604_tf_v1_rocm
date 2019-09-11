@@ -127,4 +127,8 @@ RUN pip install -r /tmp/requirements.txt
 
 RUN pip freeze
 
+# Clone the model and benchmark folders as part of the Docker image for dev purpose
+RUN git clone -b master https://github.com/tensorflow/benchmarks.git
+RUN git clone -b master https://github.com/tensorflow/models.git
+
 WORKDIR $HOME
