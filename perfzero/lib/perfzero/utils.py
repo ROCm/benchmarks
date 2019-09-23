@@ -310,7 +310,7 @@ def get_cpu_socket_count():
 
 
 def get_gpu_info():
-  """Returns gpu information using nvidia-smi.
+  """Returns gpu information using nvidia-smi or rocm-smi.
 
   Note: Assumes if the system has multiple GPUs that they are all the same with
   one exception.  If the first result is a Quadro, the heuristic assumes
@@ -320,9 +320,20 @@ def get_gpu_info():
     A dict containing gpu_driver_version, gpu_model and gpu_count or None if
     `nvidia-smi` is not found or fails.
   """
+  cmd = '/opt/rocm/bin/rocm-smi -i | grep GPU | wc -l'
+  exit_code, rocm_gpu_cnt = run_command(cmd)
+  cmd = 'rocm-smi --showproductname --showdriverversion'
+  exit_code, result = run_command(cmd)
+  gpu_info = {}
+  gpu_info['gpu_driver_version'] = result[result.find("Driver version")+16:result.find("Driver version") + 22].strip()
+  gpu_info['gpu_model'] =  result[result.find("Card SKU")+11:result.find("Card SKU") + 17].strip()
+  gpu_info['gpu_count'] = str(rocm_gpu_cnt).strip() 
+
+  return gpu_info
+
+"""
   cmd = 'nvidia-smi --query-gpu=driver_version,gpu_name --format=csv'
   exit_code, result = run_command(cmd)
-
   if exit_code != 0:
     logging.error('nvidia-smi did not return as expected: %s', result)
     return None
@@ -338,7 +349,7 @@ def get_gpu_info():
   gpu_info['gpu_count'] = len(lines) - 1
 
   return gpu_info
-
+"""
 
 def read_benchmark_result(benchmark_result_file_path):
   """Read benchmark result from the protobuf file."""
