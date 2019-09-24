@@ -318,38 +318,39 @@ def get_gpu_info():
 
   Returns:
     A dict containing gpu_driver_version, gpu_model and gpu_count or None if
-    `nvidia-smi` is not found or fails.
+    neither `rocm-smi` nor `nvidia-smi` is not found or fails.
   """
+
+  gpu_info = {}
   cmd = '/opt/rocm/bin/rocm-smi -i | grep GPU | wc -l'
   exit_code, rocm_gpu_cnt = run_command(cmd)
-  cmd = 'rocm-smi --showproductname --showdriverversion'
-  exit_code, result = run_command(cmd)
-  gpu_info = {}
-  gpu_info['gpu_driver_version'] = result[result.find("Driver version")+16:result.find("Driver version") + 22].strip()
-  gpu_info['gpu_model'] =  result[result.find("Card SKU")+11:result.find("Card SKU") + 17].strip()
-  gpu_info['gpu_count'] = str(rocm_gpu_cnt).strip() 
+  if exit_code == 0 and int(rocm_gpu_cnt) > 1:
+    cmd = 'rocm-smi --showproductname --showdriverversion'
+    exit_code, result = run_command(cmd)
+
+    gpu_info['gpu_driver_version'] = result[result.find("Driver version")+\
+    16:result.find("Driver version") + 22].strip()
+    gpu_info['gpu_model'] =  result[result.find("Card SKU")+\
+    11:result.find("Card SKU") + 17].strip()
+    gpu_info['gpu_count'] = str(rocm_gpu_cnt).strip()
+
+  else:
+    cmd = 'nvidia-smi --query-gpu=driver_version,gpu_name --format=csv'
+    exit_code, result = run_command(cmd)
+    if exit_code != 0:
+      logging.error('nvidia-smi did not return as expected: %s', result)
+      return None
+
+    lines = result.splitlines()
+    gpu_info_line = lines[1]
+    if 'Quadro' in gpu_info_line and len(lines) >= 3:
+      gpu_info_line = lines[2]
+
+    gpu_info['gpu_driver_version'] = gpu_info_line.split(',')[0].strip()
+    gpu_info['gpu_model'] = gpu_info_line.split(',')[1].strip()
+    gpu_info['gpu_count'] = len(lines) - 1
 
   return gpu_info
-
-"""
-  cmd = 'nvidia-smi --query-gpu=driver_version,gpu_name --format=csv'
-  exit_code, result = run_command(cmd)
-  if exit_code != 0:
-    logging.error('nvidia-smi did not return as expected: %s', result)
-    return None
-
-  lines = result.splitlines()
-  gpu_info_line = lines[1]
-  if 'Quadro' in gpu_info_line and len(lines) >= 3:
-    gpu_info_line = lines[2]
-
-  gpu_info = {}
-  gpu_info['gpu_driver_version'] = gpu_info_line.split(',')[0].strip()
-  gpu_info['gpu_model'] = gpu_info_line.split(',')[1].strip()
-  gpu_info['gpu_count'] = len(lines) - 1
-
-  return gpu_info
-"""
 
 def read_benchmark_result(benchmark_result_file_path):
   """Read benchmark result from the protobuf file."""
