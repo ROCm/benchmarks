@@ -16,17 +16,11 @@
 """Image pre-processing utilities.
 """
 
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-
 import math
-from six.moves import xrange  # pylint: disable=redefined-builtin
-import tensorflow as tf
+import tensorflow.compat.v1 as tf
 
+# pylint: disable=g-direct-tensorflow-import
 import cnn_util
-from tensorflow.contrib.data.python.ops import threadpool
-from tensorflow.contrib.image.python.ops import distort_image_ops
 from tensorflow.python.data.ops import multi_device_iterator_ops
 from tensorflow.python.framework import function
 from tensorflow.python.layers import utils
@@ -429,6 +423,17 @@ def distort_color(image, batch_position=0, distort_color_in_yiq=False,
   Returns:
     color-distorted image
   """
+  if distort_color_in_yiq:
+    try:
+      from tensorflow.contrib.image.python.ops import distort_image_ops  # pylint: disable=g-import-not-at-top
+    except ImportError:
+      raise ValueError(
+          'In TF2, you cannot pass --distortions unless you also pass '
+          '--nodistort_color_in_yiq. This is because the random_hsv_in_yiq was '
+          'removed in TF2. --distortions does not improve accuracy on resnet '
+          'so it is not recommended. --nodistort_color_in_yiq also has no '
+          'impact on accuracy, but may hurt performance.')
+
   with tf.name_scope(scope or 'distort_color'):
 
     def distort_fn_0(image=image):
@@ -543,7 +548,7 @@ class InputPreprocessor(object):
     raise NotImplementedError('Must be implemented by subclass.')
 
   def create_iterator(self, ds):
-    ds_iterator = tf.compat.v1.data.make_initializable_iterator(ds)
+    ds_iterator = tf.data.make_initializable_iterator(ds)
     tf.add_to_collection(tf.GraphKeys.TABLE_INITIALIZERS,
                          ds_iterator.initializer)
     return ds_iterator
@@ -687,10 +692,9 @@ class BaseImagePreprocessor(InputPreprocessor):
             num_parallel_batches=num_splits))
     ds = ds.prefetch(buffer_size=num_splits)
     if num_threads:
-      ds = threadpool.override_threadpool(
-          ds,
-          threadpool.PrivateThreadPool(
-              num_threads, display_name='input_pipeline_thread_pool'))
+      options = tf.data.Options()
+      options.experimental_threading.private_threadpool_size = num_threads
+      ds = ds.with_options(options)
     return ds
 
 
@@ -748,7 +752,7 @@ class RecordInputImagePreprocessor(BaseImagePreprocessor):
             datasets_parallel_interleave_prefetch=(
                 params.datasets_parallel_interleave_prefetch))
         ds_iterator = self.create_iterator(ds)
-        for d in xrange(self.num_splits):
+        for d in range(self.num_splits):
           images[d], labels[d] = ds_iterator.get_next()
 
       # TODO(laigd): consider removing the --use_datasets option, it should
@@ -765,14 +769,14 @@ class RecordInputImagePreprocessor(BaseImagePreprocessor):
         records = record_input.get_yield_op()
         records = tf.split(records, self.batch_size, 0)
         records = [tf.reshape(record, []) for record in records]
-        for idx in xrange(self.batch_size):
+        for idx in range(self.batch_size):
           value = records[idx]
           (image, label) = self.parse_and_preprocess(value, idx)
           split_index = idx % self.num_splits
           labels[split_index].append(label)
           images[split_index].append(image)
 
-      for split_index in xrange(self.num_splits):
+      for split_index in range(self.num_splits):
         if not params.use_datasets:
           images[split_index] = tf.parallel_stack(images[split_index])
           labels[split_index] = tf.concat(labels[split_index], 0)
@@ -793,7 +797,7 @@ class ImagenetPreprocessor(RecordInputImagePreprocessor):
   def preprocess(self, image_buffer, bbox, batch_position):
     # pylint: disable=g-import-not-at-top
     try:
-      from official.resnet.imagenet_preprocessing import preprocess_image
+      from official.r1.resnet.imagenet_preprocessing import preprocess_image
     except ImportError:
       tf.logging.fatal('Please include tensorflow/models to the PYTHONPATH.')
       raise
@@ -885,7 +889,7 @@ class Cifar10ImagePreprocessor(BaseImagePreprocessor):
       # same image via a strided_slice op, but would be slower.
       raw_images = tf.unstack(raw_images, axis=0)
       raw_labels = tf.unstack(raw_labels, axis=0)
-      for i in xrange(self.batch_size):
+      for i in range(self.batch_size):
         split_index = i % self.num_splits
         # The raw image read from data has the format [depth, height, width]
         # reshape to the format returned by minibatch.
@@ -897,7 +901,7 @@ class Cifar10ImagePreprocessor(BaseImagePreprocessor):
 
         labels[split_index].append(raw_labels[i])
 
-      for split_index in xrange(self.num_splits):
+      for split_index in range(self.num_splits):
         images[split_index] = tf.parallel_stack(images[split_index])
         labels[split_index] = tf.parallel_stack(labels[split_index])
       return images, labels
@@ -914,8 +918,21 @@ class COCOPreprocessor(BaseImagePreprocessor):
     del shift_ratio  # Not used when using datasets instead of data_flow_ops
     with tf.name_scope('batch_processing'):
       ds = self.create_dataset(
-          self.batch_size, self.num_splits, self.batch_size_per_split,
-          dataset, subset, self.train, params.datasets_repeat_cached_sample)
+          batch_size=self.batch_size,
+          num_splits=self.num_splits,
+          batch_size_per_split=self.batch_size_per_split,
+          dataset=dataset,
+          subset=subset,
+          train=self.train,
+          datasets_repeat_cached_sample=params.datasets_repeat_cached_sample,
+          num_threads=params.datasets_num_private_threads,
+          datasets_use_caching=params.datasets_use_caching,
+          datasets_parallel_interleave_cycle_length=(
+              params.datasets_parallel_interleave_cycle_length),
+          datasets_sloppy_parallel_interleave=(
+              params.datasets_sloppy_parallel_interleave),
+          datasets_parallel_interleave_prefetch=(
+              params.datasets_parallel_interleave_prefetch))
       ds_iterator = self.create_iterator(ds)
 
       # Training data: 4 tuple
@@ -924,7 +941,7 @@ class COCOPreprocessor(BaseImagePreprocessor):
       input_len = 4 if subset == 'train' else 5
       input_lists = [[None for _ in range(self.num_splits)]
                      for _ in range(input_len)]
-      for d in xrange(self.num_splits):
+      for d in range(self.num_splits):
         input_list = ds_iterator.get_next()
         for i in range(input_len):
           input_lists[i][d] = input_list[i]
@@ -1073,10 +1090,9 @@ class COCOPreprocessor(BaseImagePreprocessor):
             drop_remainder=train))
     ds = ds.prefetch(buffer_size=num_splits)
     if num_threads:
-      ds = threadpool.override_threadpool(
-          ds,
-          threadpool.PrivateThreadPool(
-              num_threads, display_name='input_pipeline_thread_pool'))
+      options = tf.data.Options()
+      options.experimental_threading.private_threadpool_size = num_threads
+      ds = ds.with_options(options)
     return ds
 
   def supports_datasets(self):
@@ -1152,12 +1168,12 @@ class TestImagePreprocessor(BaseImagePreprocessor):
           name='image_batch')
       images = [[] for _ in range(self.num_splits)]
       labels = [[] for _ in range(self.num_splits)]
-      for i in xrange(self.batch_size):
+      for i in range(self.batch_size):
         split_index = i % self.num_splits
         raw_image = tf.cast(raw_images[i], self.dtype)
         images[split_index].append(raw_image)
         labels[split_index].append(raw_labels[i])
-      for split_index in xrange(self.num_splits):
+      for split_index in range(self.num_splits):
         images[split_index] = tf.parallel_stack(images[split_index])
         labels[split_index] = tf.parallel_stack(labels[split_index])
 
@@ -1235,10 +1251,9 @@ class LibrispeechPreprocessor(InputPreprocessor):
         drop_remainder=True)
     ds = ds.prefetch(buffer_size=num_splits)
     if num_threads:
-      ds = threadpool.override_threadpool(
-          ds,
-          threadpool.PrivateThreadPool(
-              num_threads, display_name='input_pipeline_thread_pool'))
+      options = tf.data.Options()
+      options.experimental_threading.private_threadpool_size = num_threads
+      ds = ds.with_options(options)
     return ds
 
   def minibatch(self, dataset, subset, params, shift_ratio=-1):
@@ -1269,7 +1284,7 @@ class LibrispeechPreprocessor(InputPreprocessor):
       # The four lists are: input spectrogram feature, labels, input lengths,
       # label lengths
       input_lists = [[None for _ in range(self.num_splits)] for _ in range(4)]
-      for d in xrange(self.num_splits):
+      for d in range(self.num_splits):
         input_list = ds_iterator.get_next()
         for i in range(4):
           input_lists[i][d] = input_list[i]

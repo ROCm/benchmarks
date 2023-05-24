@@ -24,17 +24,12 @@ the model specified by the --model flag.
 TODO(reedwm): Allow custom sizes to be specified.
 """
 
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-
-
 import os
 import time
 
 from absl import app
 from absl import flags as absl_flags
-import tensorflow as tf
+import tensorflow.compat.v1 as tf
 
 from tensorflow.python.ops import control_flow_ops
 import benchmark_cnn
@@ -43,14 +38,14 @@ import flags
 from cnn_util import log_fn
 
 
-absl_flags.DEFINE_integer('iters_per_step', 5,
-                          'Number of iterations to run all-reduce for, per '
-                          'step. Every step, a session will be run on a Graph '
-                          'that contains this many copies of the all-reduce. '
-                          'The copies are run sequentially. Setting this above '
-                          '1 is useful to lower the overhead of starting the '
-                          'session run, running the VariableV2 ops at the '
-                          'start of the step, etc.')
+_ITERS_PER_STEP = absl_flags.DEFINE_integer(
+    'iters_per_step', 5, 'Number of iterations to run all-reduce for, per '
+    'step. Every step, a session will be run on a Graph '
+    'that contains this many copies of the all-reduce. '
+    'The copies are run sequentially. Setting this above '
+    '1 is useful to lower the overhead of starting the '
+    'session run, running the VariableV2 ops at the '
+    'start of the step, etc.')
 
 
 flags.define_flags()
@@ -203,10 +198,10 @@ def run_graph(benchmark_op, bench_cnn, init_ops, dummy_loss_op):
     for i in range(-bench_cnn.num_warmup_batches, bench_cnn.num_batches):
       if i == 0:
         log_fn('Running all-reduce ops')
-        start = time.time()
+        start = time.perf_counter()
       if i > 0 and i % bench_cnn.params.display_every == 0:
         log_fn('Iteration: %d. Average time per step so far: %s' %
-               (i, (time.time() - start) / i))
+               (i, (time.perf_counter() - start) / i))
       # Call benchmark_one_step instead of directly calling sess.run(...), to
       # potentially get a trace file, partitioned graphs, etc.
       benchmark_cnn.benchmark_one_step(
@@ -225,7 +220,7 @@ def run_graph(benchmark_op, bench_cnn, init_ops, dummy_loss_op):
           params=bench_cnn.params,
           show_images_per_sec=False)
     log_fn('Average time per step: %s' %
-           ((time.time() - start) / bench_cnn.num_batches))
+           ((time.perf_counter() - start) / bench_cnn.num_batches))
 
 
 def run_benchmark(bench_cnn, num_iters):
@@ -283,7 +278,8 @@ def main(positional_arguments):
   tfversion = cnn_util.tensorflow_version_tuple()
   log_fn('TensorFlow:  %i.%i' % (tfversion[0], tfversion[1]))
 
-  run_benchmark(bench, absl_flags.FLAGS.iters_per_step)
+  run_benchmark(bench, _ITERS_PER_STEP.value)
 
 if __name__ == '__main__':
+  tf.disable_v2_behavior()
   app.run(main)  # Raises error on invalid flags, unlike tf.app.run()

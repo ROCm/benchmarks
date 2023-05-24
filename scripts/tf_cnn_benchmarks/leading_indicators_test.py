@@ -19,10 +19,6 @@ to ensure the various variable_update options have not regressing. Not all
 options are tested.  The tests focus on the most viable options.
 """
 
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-
 import ctypes
 import logging
 import os
@@ -30,12 +26,12 @@ import sys
 
 from absl import flags
 from absl.testing import absltest  # pylint: disable=unused-import
-import tensorflow as tf  # pylint: disable=g-bad-import-order
+import tensorflow.compat.v1 as tf  # pylint: disable=g-bad-import-order
 import benchmark_cnn
 from platforms import util as platforms_util
 
-flags.DEFINE_integer('num_batches', None,
-                     'number of batches to run, excluding warmup')
+_NUM_BATCHES = flags.DEFINE_integer(
+    'num_batches', None, 'number of batches to run, excluding warmup')
 
 
 class BenchmarkBase(tf.test.Benchmark):
@@ -93,8 +89,8 @@ class BenchmarkBase(tf.test.Benchmark):
   def _shared_params(self):
     """Returns shared parameters for all benchmarks in this file."""
     params = {}
-    if flags.FLAGS.num_batches is not None:
-      params['num_batches'] = flags.FLAGS.num_batches
+    if _NUM_BATCHES.value is not None:
+      params['num_batches'] = _NUM_BATCHES.value
     if self.output_dir is not None:
       params['benchmark_log_dir'] = self.output_dir
     return benchmark_cnn.make_params(**params)
@@ -253,7 +249,8 @@ class Resnet50Benchmarks(BenchmarkBase):
   def _shared_params(self):
     """Returns shared parameters for all ResNet50 benchmarks."""
     return BenchmarkBase._shared_params(self)._replace(
-        model='resnet50', batch_size=128, distortions=False)
+        model='resnet50', batch_size=128, distortions=False,
+        optimizer='momentum')
 
   def _shared_params_fp16(self):
     """Returns shared parameters for all ResNet50 FP16 benchmarks."""
@@ -262,16 +259,15 @@ class Resnet50Benchmarks(BenchmarkBase):
         batch_size=256,
         distortions=False,
         use_fp16=True,
+        optimizer='momentum',
+        loss_type_to_report='base_loss',
+        compute_lr_on_cpu=True,
+        single_l2_loss_op=True
     )
 
   def benchmark_synth_1gpu_gpuparams(self):
     """Tests 1 gpu with synthetic data."""
     params = self._shared_params()._replace(num_gpus=1)
-    self._run_benchmark(params)
-
-  def benchmark_synth_1gpu_gpuparams_batch64(self):
-    """Tests 1 gpu with synthetic data."""
-    params = self._shared_params()._replace(num_gpus=1, batch_size=64)
     self._run_benchmark(params)
 
   def benchmark_fake_1gpu_gpuparams(self):
@@ -286,64 +282,12 @@ class Resnet50Benchmarks(BenchmarkBase):
         num_gpus=1, variable_update='parameter_server')
     self._binary_search_batch_size(params, init_batch_size=128)
 
-  def benchmark_synth_4gpu_gpuparams(self):
-    """Tests 4 gpus with synthetic data with parameters on the gpus."""
-    params = self._shared_params()._replace(
-        num_gpus=4, variable_update='parameter_server')
-    self._run_benchmark(params)
-
-  def benchmark_fake_4gpu_gpuparams(self):
-    """Tests 4 gpus with fake data with parameters on the gpus."""
-    params = self._shared_params()._replace(
-        num_gpus=4,
-        data_dir=self.fake_data_dir,
-        data_name='imagenet',
-        variable_update='parameter_server')
-    self._run_benchmark(params)
-
-  def benchmark_synth_4gpu_cpuparams(self):
-    """Tests 4 gpus with synthetic data with parameters on the cpu."""
-    params = self._shared_params()._replace(
-        num_gpus=4,
-        variable_update='parameter_server',
-        local_parameter_device='cpu')
-    self._run_benchmark(params)
-
-  def benchmark_synth_8gpu_cpuparams(self):
-    """Tests 8 gpus with synthetic data with parameters on the cpu."""
-    params = self._shared_params()._replace(
-        num_gpus=8,
-        variable_update='parameter_server',
-        local_parameter_device='cpu')
-    self._run_benchmark(params)
-
-  def benchmark_fake_4gpu_cpuparams(self):
-    """Tests 4 gpus with fake data with parameters on the cpu."""
-    params = self._shared_params()._replace(
-        num_gpus=4,
-        data_dir=self.fake_data_dir,
-        data_name='imagenet',
-        variable_update='parameter_server',
-        local_parameter_device='cpu')
-    self._run_benchmark(params)
-
-  def benchmark_fake_8gpu_cpuparams(self):
-    """Tests 8 gpus with fake data with parameters on the cpu."""
-    params = self._shared_params()._replace(
-        num_gpus=8,
-        data_dir=self.fake_data_dir,
-        data_name='imagenet',
-        variable_update='parameter_server',
-        local_parameter_device='cpu')
-    self._run_benchmark(params)
-
   def benchmark_synth_4gpu_gpureplicated(self):
     """Tests 4 gpu with synthetic data with parameters replicated."""
     params = self._shared_params()._replace(
         num_gpus=4,
         variable_update='replicated',
         all_reduce_spec='nccl',
-        compact_gradient_transfer=False,
         gradient_repacking=2)
     self._run_benchmark(params)
 
@@ -353,7 +297,6 @@ class Resnet50Benchmarks(BenchmarkBase):
         num_gpus=8,
         variable_update='replicated',
         all_reduce_spec='nccl',
-        compact_gradient_transfer=False,
         gradient_repacking=2)
     self._run_benchmark(params)
 
@@ -365,11 +308,10 @@ class Resnet50Benchmarks(BenchmarkBase):
         data_name='imagenet',
         variable_update='replicated',
         all_reduce_spec='nccl',
-        compact_gradient_transfer=False,
         gradient_repacking=2)
     self._run_benchmark(params)
 
-  # FP16 mixed-precisions tests.
+  # FP16 mixed-precision tests.
 
   def benchmark_fp16_synth_1gpu_gpuparams(self):
     """Tests 1 gpu with synthetic data with parameters on the gpu."""
@@ -383,25 +325,12 @@ class Resnet50Benchmarks(BenchmarkBase):
         num_gpus=1, batch_size=128, variable_update='parameter_server')
     self._run_benchmark(params)
 
-  def benchmark_fp16_synth_1gpu_gpuparams_batch64(self):
-    """Tests 1 gpu with synthetic data with parameters on the gpu."""
-    params = self._shared_params_fp16()._replace(
-        num_gpus=1, batch_size=64, variable_update='parameter_server')
-    self._run_benchmark(params)
-
-  def benchmark_fp16_synth_4gpu_gpuparams(self):
-    """Tests 4 gpus with synthetic data with parameters on the gpus."""
-    params = self._shared_params_fp16()._replace(
-        num_gpus=4, variable_update='parameter_server')
-    self._run_benchmark(params)
-
   def benchmark_fp16_synth_4gpu_gpureplicated(self):
     """Tests 4 gpu with synthetic data with nccl and all_reduce."""
     params = self._shared_params_fp16()._replace(
         num_gpus=4,
         variable_update='replicated',
         all_reduce_spec='nccl',
-        compact_gradient_transfer=False,
         gradient_repacking=2)
     self._run_benchmark(params)
 
@@ -411,7 +340,6 @@ class Resnet50Benchmarks(BenchmarkBase):
         num_gpus=8,
         variable_update='replicated',
         all_reduce_spec='nccl',
-        compact_gradient_transfer=False,
         gradient_repacking=2)
     self._run_benchmark(params)
 
@@ -432,7 +360,6 @@ class Resnet50Benchmarks(BenchmarkBase):
         data_name='imagenet',
         variable_update='replicated',
         all_reduce_spec='nccl',
-        compact_gradient_transfer=False,
         gradient_repacking=2)
     self._run_benchmark(params)
 
@@ -445,7 +372,6 @@ class Resnet50Benchmarks(BenchmarkBase):
         distortions=True,
         variable_update='replicated',
         all_reduce_spec='nccl',
-        compact_gradient_transfer=False,
         gradient_repacking=2)
     self._run_benchmark(params)
 
@@ -459,7 +385,7 @@ class Resnet50Benchmarks(BenchmarkBase):
   def benchmark_fp16_xla_synth_1gpu_gpuparams(self):
     """Tests 1 gpu with fp16, synthetic data with XLA."""
     params = self._shared_params_fp16()._replace(
-        num_gpus=1, variable_update='parameter_server', xla=True, use_fp16=True)
+        num_gpus=1, variable_update='parameter_server', xla=True)
     self._run_benchmark(params)
 
   # Test does not run as part of continuous testing on guitar.
@@ -475,8 +401,7 @@ class Resnet50Benchmarks(BenchmarkBase):
         num_gpus=1,
         batch_size=64,
         variable_update='parameter_server',
-        xla=True,
-        use_fp16=True)
+        xla=True)
     self._run_benchmark(params)
 
   def benchmark_fp16_xla_batch128_synth_1gpu_gpuparams(self):
@@ -485,8 +410,7 @@ class Resnet50Benchmarks(BenchmarkBase):
         num_gpus=1,
         batch_size=128,
         variable_update='parameter_server',
-        xla=True,
-        use_fp16=True)
+        xla=True)
     self._run_benchmark(params)
 
   def benchmark_xla_synth_1gpu_max_batch_size(self):
@@ -542,6 +466,10 @@ class Resnet50v15Benchmarks(BenchmarkBase):
         batch_size=256,
         distortions=False,
         use_fp16=True,
+        optimizer='momentum',
+        loss_type_to_report='base_loss',
+        compute_lr_on_cpu=True,
+        single_l2_loss_op=True
     )
 
   def benchmark_fp16_synth_1gpu_gpuparams(self):
@@ -551,7 +479,7 @@ class Resnet50v15Benchmarks(BenchmarkBase):
 
   def benchmark_fp16_batch256_synth_8gpu_gpuparams(self):
     """Tests 8 gpus with synthetic data at batch 256."""
-    params = self._shared_params_fp16()._replace(num_gpus=8, batch_size=256)
+    params = self._shared_params_fp16()._replace(num_gpus=8)
     self._run_benchmark(params)
 
   def benchmark_fp16_batch128_synth_1gpu_gpuparams(self):
@@ -563,14 +491,6 @@ class Resnet50v15Benchmarks(BenchmarkBase):
     """Tests 1 gpu with fake data."""
     params = self._shared_params_fp16()._replace(
         num_gpus=1, data_dir=self.fake_data_dir, data_name='imagenet')
-    self._run_benchmark(params)
-
-  def benchmark_fp16_synth_4gpu_cpuparams(self):
-    """Tests 4 gpus with synthetic data with parameters on the cpu."""
-    params = self._shared_params_fp16()._replace(
-        num_gpus=4,
-        variable_update='parameter_server',
-        local_parameter_device='cpu')
     self._run_benchmark(params)
 
   def benchmark_fp16_synth_8gpu_gpureplicated(self):
@@ -644,6 +564,17 @@ class Resnet50v15Benchmarks(BenchmarkBase):
         xla_compile=True)
     self._run_benchmark(params)
 
+  def benchmark_fp16_xla_synth_8gpu_gpureplicated(self):
+    """Tests 8 gpu with synthetic data with parameters replicated."""
+    params = self._shared_params_fp16()._replace(
+        num_gpus=8,
+        num_batches=200,
+        variable_update='replicated',
+        all_reduce_spec='nccl',
+        gradient_repacking=2,
+        xla=True)
+    self._run_benchmark(params)
+
   def benchmark_fp16_xla_compile_fake_8gpu_gpureplicated(self):
     """Tests 8 gpu with fake data with parameters replicated."""
     params = self._shared_params_fp16()._replace(
@@ -676,16 +607,6 @@ class Vgg16Benchmarks(BenchmarkBase):
     """Tests 1 gpu with synthetic data with parameters on gpu."""
     params = self._shared_params()._replace(
         num_gpus=1, use_fp16=True, variable_update='parameter_server')
-    self._run_benchmark(params)
-
-  def benchmark_synth_4gpu_gpureplicated(self):
-    """Tests 4 gpu with synthetic data with parameters replicated."""
-    params = self._shared_params()._replace(
-        num_gpus=4,
-        all_reduce_spec='nccl',
-        variable_update='replicated',
-        compact_gradient_transfer=False,
-        gradient_repacking=2)
     self._run_benchmark(params)
 
   def benchmark_synth_8gpu_gpureplicated(self):
@@ -1074,4 +995,5 @@ class SsdBenchmarks(BenchmarkBase):
 
 
 if __name__ == '__main__':
+  tf.disable_v2_behavior()
   tf.test.main()

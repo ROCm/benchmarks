@@ -14,17 +14,17 @@
 # ==============================================================================
 """Utilities for allreduce."""
 
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-
 import collections as pycoll
 import re
 
-from six.moves import xrange  # pylint: disable=redefined-builtin
-import tensorflow as tf
+import tensorflow.compat.v1 as tf
 
-from tensorflow.contrib.all_reduce.python import all_reduce
+# pylint: disable=g-direct-tensorflow-import,g-import-not-at-top
+try:
+  from tensorflow.python.distribute.v1 import all_reduce
+except ImportError:
+  # Compatibility with TF 2.4 and below
+  from tensorflow.python.distribute import all_reduce
 from tensorflow.python.framework import device as pydev
 from tensorflow.python.framework import ops
 from tensorflow.python.ops import collective_ops
@@ -446,7 +446,7 @@ def sum_gradients_all_reduce(single_session,
   gv = list(zip(*tower_grads))
   merge_scope = allreduce_merge_scope if allreduce_merge_scope > 0 else 1
   chunked_gv = [gv[x:x + merge_scope]
-                for x in xrange(0, len(gv), merge_scope)]
+                for x in range(0, len(gv), merge_scope)]
   for chunk in chunked_gv:
     with tf.name_scope('allreduce'):
       for grad_and_vars in chunk:
@@ -633,7 +633,7 @@ def unpack_small_tensors(tower_grads, packing):
   num_packed = len(packing.keys()) // num_devices
   for dev_idx, gv_list in enumerate(tower_grads):
     new_gv_list = gv_list[num_packed:]
-    for i in xrange(0, num_packed):
+    for i in range(0, num_packed):
       k = '%d:%d' % (dev_idx, i)
       gpt = packing[k]
       gv = unpack_grad_tuple(gv_list[i], gpt)

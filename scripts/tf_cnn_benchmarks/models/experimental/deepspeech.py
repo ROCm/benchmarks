@@ -19,18 +19,14 @@ References:
   Deep Speech 2: End-to-End Speech Recognition in English and Mandarin
 """
 
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-
 import itertools
 
 import numpy as np
-from six.moves import xrange  # pylint: disable=redefined-builtin
-import tensorflow as tf
+import tensorflow.compat.v1 as tf
 import constants
 from cnn_util import log_fn
 from models import model as model_lib
+from tensorflow.python.ops import variables  # pylint: disable=g-direct-tensorflow-import
 
 
 class DeepSpeechDecoder(object):
@@ -39,7 +35,7 @@ class DeepSpeechDecoder(object):
   def __init__(self, labels, blank_index=28):
     """Decoder initialization.
 
-    Arguments:
+    Args:
       labels: a string specifying the speech labels for the decoder to use.
       blank_index: an integer specifying index for the blank character. Defaults
         to 28.
@@ -291,7 +287,9 @@ class DeepSpeech2Model(model_lib.Model):
   def get_synthetic_inputs(self, input_name, nclass):
     inputs = tf.random_uniform(self.get_input_shapes('train')[0],
                                dtype=self.get_input_data_types('train')[0])
-    inputs = tf.contrib.framework.local_variable(inputs, name=input_name)
+    inputs = variables.VariableV1(inputs, trainable=False,
+                                  collections=[tf.GraphKeys.LOCAL_VARIABLES],
+                                  name=input_name)
     labels = tf.convert_to_tensor(
         np.random.randint(28, size=[self.batch_size, self.max_label_length]))
     input_lengths = tf.convert_to_tensor(
@@ -347,7 +345,7 @@ class DeepSpeech2Model(model_lib.Model):
 
     # RNN layers.
     rnn_cell = DeepSpeech2Model.SUPPORTED_RNNS[self.rnn_type]
-    for layer_counter in xrange(self.num_rnn_layers):
+    for layer_counter in range(self.num_rnn_layers):
       # No batch normalization on the first layer.
       use_batch_norm = (layer_counter != 0)
       inputs = self._rnn_layer(inputs, rnn_cell, self.rnn_hidden_size,
