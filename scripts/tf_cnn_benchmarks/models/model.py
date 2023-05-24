@@ -20,7 +20,7 @@ import tensorflow.compat.v1 as tf
 
 import convnet_builder
 import mlperf
-from tensorflow.python.ops import variables as variables_module  # pylint: disable=g-direct-tensorflow-import
+from tensorflow.python.ops import variable_v1 as variables_module  # pylint: disable=g-direct-tensorflow-import
 
 # BuildNetworkResult encapsulate the result (e.g. logits) of a
 # Model.build_network() call.
