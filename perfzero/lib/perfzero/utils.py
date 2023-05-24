@@ -18,12 +18,14 @@ from __future__ import print_function
 import importlib
 import logging
 import os
+import shutil
 import subprocess
 import sys
 import threading
 import traceback
 import requests
-
+import json
+import re
 
 def create_empty_file(parent_directory, file_basename):
   """Creates an empty file with a given basename in a parent directory.
@@ -117,6 +119,7 @@ def setup_python_path(site_packages_dir, python_path_str):
   if python_path_str:
     python_paths = python_path_str.split(',')
     for python_path in python_paths:
+      logging.info('Adding path %s to sys.path', python_path)
       sys.path.append(os.path.join(site_packages_dir, python_path))
   logging.debug('PYTHONPATH: %s', sys.path)
 
@@ -193,8 +196,9 @@ def download_data(download_infos):
           os.path.join(local_path_parent, expected_base_name))])
     logging.info('Downloaded data from %s to %s',
                  info['url'], info['local_path'])
-    # Decompress file if file name ends with .gz
-    if info['url'].endswith('.gz'):
+    # Decompress file if file name ends with .gz unless caller sets 'decompress'
+    # to False in info.
+    if info['url'].endswith('.gz') and info.get('decompress', True):
       run_commands(['tar xvf {} -C {}'.format(
           info['local_path'], local_path_parent)])
       logging.info('Decompressed file %s', info['local_path'])
@@ -309,8 +313,52 @@ def get_cpu_socket_count():
     return -1
 
 
-def get_gpu_info():
-  """Returns gpu information using nvidia-smi or rocm-smi.
+def _get_amd_gpu_info():
+  """Returns gpu information using rocm-smi.
+
+  Note: Assumes if the system has multiple GPUs, that they are all the same
+
+  Returns:
+    A dict containing gpu_driver_version, gpu_model and gpu_count or None if
+    `rocm-smi` is not found or fails.
+  """
+  cmd = 'rocm-smi --json --showproductname --showdriverversion'
+  exit_code, result = run_command(cmd)
+
+  if exit_code != 0:
+    logging.error('rocm-smi did not return as expected: %s', result)
+    return None
+
+  def get_gpu_driver_version(rocm_smi_output):
+    return rocm_smi_output['system']['Driver version']
+
+  def get_gpu_model(rocm_smi_output):
+    gpu_model = ""
+    for key, value in rocm_smi_output.items():
+      if re.match("card[0-9]+", key):
+        gpu_model = value['Card SKU']
+        break
+    return gpu_model
+
+  def get_gpu_count(rocm_smi_output):
+    gpu_count = 0
+    for key, value in rocm_smi_output.items():
+      if re.match("card[0-9]+", key):
+        gpu_count += 1
+    return gpu_count
+
+  rocm_smi_output= json.loads(result)
+
+  gpu_info = {}
+  gpu_info['gpu_driver_version'] = get_gpu_driver_version(rocm_smi_output)
+  gpu_info['gpu_model'] = get_gpu_model(rocm_smi_output)
+  gpu_info['gpu_count'] = get_gpu_count(rocm_smi_output)
+
+  return gpu_info
+
+
+def _get_nvidia_gpu_info():
+  """Returns gpu information using nvidia-smi.
 
   Note: Assumes if the system has multiple GPUs that they are all the same with
   one exception.  If the first result is a Quadro, the heuristic assumes
@@ -352,6 +400,81 @@ def get_gpu_info():
 
   return gpu_info
 
+def get_gpu_info():
+  """Returns gpu information using either nvidia-smi or rocm-smi.
+
+  Returns:
+    A dict containing gpu_driver_version, gpu_model and gpu_count or None if
+    `nvidia-smi` is not found or fails.
+  """
+  return _get_amd_gpu_info() if shutil.which("rocm-smi") \
+    else _get_nvidia_gpu_info()
+
+def setup_tpu(parameters):
+  """Sets up a TPU with a given set of parameters.
+
+  Args:
+    parameters: dictionary of TPU parameters.
+
+  Returns:
+    True if an error occurs during setup.
+  """
+  # Skip creating tpu if using a prestarted tpu.
+  if parameters.get('using_prestarted_tpu') == 'true':
+    logging.info('Skip creating TPU since the prestarted TPU %s is being used.',
+      parameters.get('name'))
+    return False
+  try:
+    base_cmd = 'gcloud compute tpus execution-groups create'
+    args = [
+        '--tpu-only',
+        '--name={}'.format(parameters.get('name')),
+        '--project={}'.format(parameters.get('project')),
+        '--zone={}'.format(parameters.get('zone')),
+        '--accelerator-type={}'.format(parameters.get('size')),
+        '--tf-version={}'.format(parameters.get('version')),
+    ]
+    command = '{} {}'.format(base_cmd, ' '.join(args))
+    logging.info('Setting up TPU: %s', command)
+    exit_code, output = run_command(command)
+    if exit_code != 0:
+      logging.error('Error in setup with output: %s', output)
+    return exit_code != 0
+  except Exception:
+    logging.error('Unable to setup TPU')
+    sys.exit(1)
+
+
+def cleanup_tpu(parameters):
+  """Cleans up an existing TPU.
+
+  Args:
+    parameters: dictionary of TPU parameters.
+
+  Returns:
+    True if an error occurs during cleanup.
+  """
+  # Skip cleaning up the tpu if using a prestarted tpu.
+  if parameters.get('using_prestarted_tpu') == 'true':
+    logging.info('Skip cleaning up TPU since the prestarted TPU %s is being used.',
+      parameters.get('name'))
+    return False
+
+  base_cmd = 'gcloud compute tpus execution-groups delete'
+
+  args = [
+      '{}'.format(parameters.get('name')),
+      '--project={}'.format(parameters.get('project')),
+      '--zone={}'.format(parameters.get('zone')),
+  ]
+  command = '{} {}'.format(base_cmd, ' '.join(args))
+  logging.info('Cleaning up TPU: %s', command)
+  exit_code, output = run_command(command)
+  if exit_code != 0:
+    logging.error('Error in cleanup with output: %s', output)
+  return exit_code != 0
+
+
 def read_benchmark_result(benchmark_result_file_path):
   """Read benchmark result from the protobuf file."""
   from google.protobuf import json_format  # pylint: disable=g-import-not-at-top
@@ -380,12 +503,46 @@ def print_thread_stacktrace():
     traceback.print_stack(frame)
 
 
-def instantiate_benchmark_class(benchmark_class, output_dir, root_data_dir):
+def instantiate_benchmark_class(
+    benchmark_class, output_dir, root_data_dir, tpu, constructor_args,
+    benchmark_class_type=None):
   """Return initialized benchmark class."""
   module_import_path, class_name = benchmark_class.rsplit('.', 1)
   module = importlib.import_module(module_import_path)
   class_ = getattr(module, class_name)
-  instance = class_(output_dir=output_dir, root_data_dir=root_data_dir)
+  if benchmark_class_type == 'tf_benchmark':
+    # for benchmarks inheriting from tf.test.Benchmark, instantiate them directly.
+    instance = class_(**constructor_args)
+  else:
+    # Default instantiation for perfzero_benchmark classes.
+    instance = class_(
+        output_dir=output_dir,
+        root_data_dir=root_data_dir,
+        tpu=tpu,
+        **constructor_args)
 
   return instance
 
+
+def copy_and_rename_dirs(dir_spec_string, dst_base_dir):
+  """Copies list of <dir-path>:new_name specs into a new dest dir.
+
+  If a path /path1/path2/dir:new_dir is given, it copies /path1/path2/dir to
+  dst_base_dir/new_dir.
+
+  Args:
+    dir_spec_string: Comma separated list of /path1/path2:new_name specs.
+    dst_base_dir: The base dir to contain the copies.
+  """
+  if not dir_spec_string:
+    return
+  dir_specs = dir_spec_string.split(',')
+  for src_dir_with_name in dir_specs:
+    src_dir, final_basename = src_dir_with_name.split(':')
+    dst_dir = os.path.join(dst_base_dir, final_basename)
+
+    if os.path.isdir(dst_dir):
+      logging.info('[DELETE] pre-existing %s', dst_dir)
+      shutil.rmtree(dst_dir)
+    logging.info('[COPY] %s -> %s', src_dir, dst_dir)
+    shutil.copytree(src_dir, dst_dir)

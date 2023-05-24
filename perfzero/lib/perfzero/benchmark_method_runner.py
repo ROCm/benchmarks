@@ -29,18 +29,24 @@ import perfzero.utils as utils
 
 
 def run(benchmark_method, harness_info, site_package_info,
-        root_output_dir, config, queue):
+        root_output_dir, config, queue, trial_id):
   try:
     _run_internal(benchmark_method, harness_info, site_package_info,
-                  root_output_dir, config, queue)
+                  root_output_dir, config, queue, trial_id)
   except Exception:  # pylint: disable=broad-except
     logging.error('Benchmark execution for %s failed due to error:\n %s',
                   benchmark_method, traceback.format_exc())
     queue.put((True, None, False, None))
 
 
+def _set_file_contents(content_str, output_filename):
+  with open(output_filename, 'w') as f:
+    f.write(content_str)
+  logging.info('Wrote summary to file %s', output_filename)
+
+
 def _run_internal(benchmark_method, harness_info, site_package_info,
-                  root_output_dir, config, queue):
+                  root_output_dir, config, queue, trial_id):
   """Run benchmark method and put result to the queue.
 
   Args:
@@ -49,7 +55,8 @@ def _run_internal(benchmark_method, harness_info, site_package_info,
     site_package_info: Description of the site-package used in the benchmark
     root_output_dir: Directory under which to put the benchmark output
     config: An instance of perfzero_config
-    queue: An interprocess queue to transfer benchmark result to the caller
+    queue: An interprocess queue to transfer benchmark result to the caller.
+    trial_id: An integer trial id to annotate in the benchmark result.
   """
   start_timestamp = time.time()
   execution_timestamp = start_timestamp
@@ -57,10 +64,17 @@ def _run_internal(benchmark_method, harness_info, site_package_info,
   execution_id = (config.execution_id if config.execution_id else
                   datetime.datetime.now().strftime('%Y-%m-%d-%H-%M-%S-%f'))
   output_dir = os.path.join(root_output_dir, execution_id)
+  if config.scratch_gcs_url:
+    model_output_dir = os.path.join(config.scratch_gcs_url, execution_id)
+  else:
+    model_output_dir = output_dir
   utils.make_dir_if_not_exist(output_dir)
-  benchmark_class, benchmark_method_name = benchmark_method.rsplit('.', 1)
+  if ':' in benchmark_method:
+    benchmark_class, benchmark_method_name = benchmark_method.rsplit(':', 1)
+  else:
+    benchmark_class, benchmark_method_name = benchmark_method.rsplit('.', 1)
   benchmark_class_name = benchmark_class.rsplit('.', 1)[1]
-
+        
   tensorflow_profiler = TensorFlowProfiler(
       config.profiler_enabled_time_str, output_dir)
   process_info_tracker = ProcessInfoTracker(output_dir)
@@ -74,8 +88,21 @@ def _run_internal(benchmark_method, harness_info, site_package_info,
   logging.getLogger().addHandler(filehandler)
 
   try:
+    if config.tpu_parameters:
+      tpu = config.tpu_parameters.get('name')
+    else:
+      tpu = None
+    if config.perfzero_constructor_args:
+      constructor_args = json.loads(config.perfzero_constructor_args)
+    else:
+      constructor_args = {}
     class_instance = utils.instantiate_benchmark_class(
-        benchmark_class, output_dir, config.root_data_dir)
+        benchmark_class=benchmark_class,
+        output_dir=model_output_dir,
+        root_data_dir=config.root_data_dir,
+        tpu=tpu,
+        constructor_args=constructor_args,
+        benchmark_class_type=config.benchmark_class_type)
     # tf.test.Benchmark.report_benchmark() writes results to a file with
     # path benchmark_result_file_path_prefix + benchmark_method
     benchmark_result_file_path_prefix = os.path.join(output_dir, 'proto_')
@@ -115,7 +142,7 @@ def _run_internal(benchmark_method, harness_info, site_package_info,
 
   upload_timestamp = time.time()
   benchmark_result = report_utils.build_benchmark_result(
-      raw_benchmark_result, method_has_exception)
+      raw_benchmark_result, method_has_exception, trial_id)
   execution_summary = report_utils.build_execution_summary(
       execution_timestamp,
       execution_id,
@@ -130,13 +157,19 @@ def _run_internal(benchmark_method, harness_info, site_package_info,
       harness_info,
       site_package_info,
       process_info,
-      method_has_exception)
+      method_has_exception,
+      is_tpu_benchmark = (config.tpu_parameters != None))
   report_utils.upload_execution_summary(
       config.bigquery_project_name,
       config.bigquery_dataset_table_name,
       execution_summary)
+  report_utils.execute_methods(
+      config.result_upload_methods,
+      execution_summary)
   logging.info('Benchmark execution for %s completed with summary:\n %s',
                benchmark_method, json.dumps(execution_summary, indent=2))
+  _set_file_contents(json.dumps(execution_summary, indent=2),
+                     os.path.join(output_dir, 'perfzero_summary.json'))
   utils.maybe_upload_to_gcs(output_dir, config.output_gcs_url)
   logging.getLogger().removeHandler(filehandler)
   method_execution_time = {
@@ -155,5 +188,3 @@ def _run_internal(benchmark_method, harness_info, site_package_info,
 
   queue.put((method_has_exception, method_execution_time,
              benchmark_result['succeeded'], output_dir))
-
-

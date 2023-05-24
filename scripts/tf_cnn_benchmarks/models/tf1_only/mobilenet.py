@@ -13,18 +13,15 @@
 # limitations under the License.
 # ==============================================================================
 """Mobilenet Base Class, branched from slim for fp16 performance study."""
-
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
 import collections
 import contextlib
 import copy
 import os
 
-import tensorflow as tf
+import tensorflow.compat.v1 as tf
+from tensorflow.contrib import slim as contrib_slim
 
-slim = tf.contrib.slim
+slim = contrib_slim
 
 
 @slim.add_arg_scope
@@ -117,7 +114,7 @@ class NoOpScope(object):
   """No-op context manager."""
 
   def __enter__(self):
-    return None
+    return
 
   def __exit__(self, exc_type, exc_value, traceback):
     return False
@@ -126,7 +123,7 @@ class NoOpScope(object):
 def safe_arg_scope(funcs, **kwargs):
   """Returns `slim.arg_scope` with all None arguments removed.
 
-  Arguments:
+  Args:
     funcs: Functions to pass to `arg_scope`.
     **kwargs: Arguments to pass to `arg_scope`.
 

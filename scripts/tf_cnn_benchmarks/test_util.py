@@ -14,16 +14,12 @@
 # ==============================================================================
 
 """Shared functionality across multiple test files."""
-
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
 from collections import namedtuple
 from contextlib import contextmanager
 import os
 
 import numpy as np
-import tensorflow as tf
+import tensorflow.compat.v1 as tf
 import benchmark_cnn
 import cnn_util
 import datasets
@@ -327,7 +323,9 @@ def get_params(train_dir_name):
       print_training_accuracy=True,
       train_dir=get_temp_dir(train_dir_name),
       variable_update='parameter_server',
-      weight_decay=0)
+      weight_decay=0,
+      distortions=True,
+      distort_color_in_yiq=False)
   return benchmark_cnn.set_default_param_values_and_env_vars(params)
 
 

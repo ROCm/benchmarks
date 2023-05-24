@@ -45,15 +45,12 @@ serialized Example proto. The Example proto contains the following fields:
     layer. The label ranges from [1, 1000] where 0 is not used. Note this is
     always identical to the image label.
 """
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
 
 import os
 import random
 
 import numpy as np
-import tensorflow as tf
+import tensorflow.compat.v1 as tf
 
 
 def _int64_feature(value):
@@ -75,13 +72,19 @@ def _bytes_feature(value):
   return tf.train.Feature(bytes_list=tf.train.BytesList(value=[value]))
 
 
+def _ensure_binary(s):
+  if isinstance(s, str):
+    s = s.encode()
+  return s
+
+
 def _convert_to_example(filename, image_buffer, label, synset, human, bbox,
                         height, width):
   """Build an Example proto for an example.
 
   Args:
     filename: string, path to an image file, e.g., '/path/to/example.JPG'
-    image_buffer: string, JPEG encoding of RGB image
+    image_buffer: bytes, JPEG encoding of RGB image
     label: integer, identifier for the ground truth for the network
     synset: string, unique WordNet ID specifying the label, e.g., 'n02323233'
     human: string, human-readable label, e.g., 'red fox, Vulpes vulpes'
@@ -103,26 +106,37 @@ def _convert_to_example(filename, image_buffer, label, synset, human, bbox,
     [l.append(point) for l, point in zip([xmin, ymin, xmax, ymax], b)]
     # pylint: enable=expression-not-assigned
 
-  colorspace = 'RGB'
+  colorspace = b'RGB'
   channels = 3
-  image_format = 'JPEG'
+  image_format = b'JPEG'
 
-  example = tf.train.Example(features=tf.train.Features(feature={
-      'image/height': _int64_feature(height),
-      'image/width': _int64_feature(width),
-      'image/colorspace': _bytes_feature(colorspace),
-      'image/channels': _int64_feature(channels),
-      'image/class/label': _int64_feature(label),
-      'image/class/synset': _bytes_feature(synset),
-      'image/class/text': _bytes_feature(human),
-      'image/object/bbox/xmin': _float_feature(xmin),
-      'image/object/bbox/xmax': _float_feature(xmax),
-      'image/object/bbox/ymin': _float_feature(ymin),
-      'image/object/bbox/ymax': _float_feature(ymax),
-      'image/object/bbox/label': _int64_feature([label] * len(xmin)),
-      'image/format': _bytes_feature(image_format),
-      'image/filename': _bytes_feature(os.path.basename(filename)),
-      'image/encoded': _bytes_feature(image_buffer)}))
+  example = tf.train.Example(
+      features=tf.train.Features(
+          feature={
+              'image/height': _int64_feature(height),
+              'image/width': _int64_feature(width),
+              'image/colorspace': _bytes_feature(colorspace),
+              'image/channels': _int64_feature(channels),
+              'image/class/label': _int64_feature(label),
+              'image/class/synset': _bytes_feature(
+                  _ensure_binary(synset)
+              ),
+              'image/class/text': _bytes_feature(
+                  _ensure_binary(human)
+              ),
+              'image/object/bbox/xmin': _float_feature(xmin),
+              'image/object/bbox/xmax': _float_feature(xmax),
+              'image/object/bbox/ymin': _float_feature(ymin),
+              'image/object/bbox/ymax': _float_feature(ymax),
+              'image/object/bbox/label': _int64_feature([label] * len(xmin)),
+              'image/format': _bytes_feature(image_format),
+              'image/filename': _bytes_feature(
+                  os.path.basename(_ensure_binary(filename))
+              ),
+              'image/encoded': _bytes_feature(image_buffer),
+          }
+      )
+  )
   return example
 
 
@@ -154,7 +168,7 @@ def _process_image(coder, name):
     coder: instance of ImageCoder to provide TensorFlow image coding utils.
     name: string, unique identifier specifying the data set.
   Returns:
-    image_buffer: string, JPEG encoding of RGB image.
+    image_buffer: bytes, JPEG encoding of RGB image.
     height: integer, image height in pixels.
     width: integer, image width in pixels.
   """

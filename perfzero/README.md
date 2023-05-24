@@ -1,19 +1,28 @@
 Table of Contents
 =================
 
-   * [Table of Contents](#table-of-contents)
-   * [Introduction](#introduction)
-   * [Executing tests](#executing-tests)
-   * [Creating tests](#creating-tests)
-   * [Deep dive into individual tools](#deep-dive-into-individual-tools)
-      * [Build docker image](#build-docker-image)
-      * [Run benchmark](#run-benchmark)
-      * [Instructions for managing Google Cloud Platform computing instance](#instructions-for-managing-google-cloud-platform-computing-instance)
-      * [Understand the benchmark execution output](#understand-the-benchmark-execution-output)
-         * [Json formatted benchmark summary](#json-formatted-benchmark-summary)
-         * [Visualize TensorFlow graph etc. using Tensorboard](#visualize-tensorflow-graph-etc-using-tensorboard)
-         * [Visualize system metric values over time](#visualize-system-metric-values-over-time)
-   * [PerfZero development](#perfzero-development)
+* [Table of Contents](#table-of-contents)
+* [Introduction](#introduction)
+* [Executing tests](#executing-tests)
+   * [PerfZero on private GCE instance.](#perfzero-on-private-gce-instance)
+      * [Step one: Create GCE Instance](#step-one-create-gce-instance)
+      * [Step two: Build docker on GCE instance](#step-two-build-docker-on-gce-instance)
+      * [Step three: Start and "enter" the docker instance](#step-three-start-and-enter-the-docker-instance)
+      * [Step four: Run tests](#step-four-run-tests)
+      * [Step five: Delete the instance when done](#step-five-delete-the-instance-when-done)
+   * [PerfZero on local workstation or any server](#perfzero-on-local-workstation-or-any-server)
+   * [PerfZero without docker](#perfzero-without-docker)
+* [Creating tests](#creating-tests)
+* [Deep dive into individual tools](#deep-dive-into-individual-tools)
+   * [Build docker image](#build-docker-image)
+   * [Run benchmark](#run-benchmark)
+   * [Instructions for managing Google Cloud Platform computing instance](#instructions-for-managing-google-cloud-platform-computing-instance)
+   * [Understand the benchmark execution output](#understand-the-benchmark-execution-output)
+      * [Json formatted benchmark summary](#json-formatted-benchmark-summary)
+      * [Profiling](#profiling)
+         * [Visualize in TensorBoard](#visualize-in-tensorboard)
+      * [Visualize system metric values over time](#visualize-system-metric-values-over-time)
+* [PerfZero development](#perfzero-development)
 
 # Introduction
 
@@ -99,10 +108,10 @@ with TensorFlow 2.0 nightly build. For info on the args read the
 
 ```bash
 python3 /workspace/perfzero/lib/benchmark.py \
---git_repos="https://github.com/tensorflow/models.git" \
+--git_repos="https://github.com/tensorflow/models.git;benchmark" \
 --python_path=models \
 --data_downloads="gs://tf-perf-imagenet-uswest1/tensorflow/cifar10_data/cifar-10-batches-bin" \
---benchmark_methods=official.resnet.keras.keras_cifar_benchmark.Resnet56KerasBenchmarkReal.benchmark_1_gpu_no_dist_strat
+--benchmark_methods=official.benchmark.keras_cifar_benchmark.Resnet56KerasBenchmarkReal.benchmark_1_gpu_no_dist_strat
 ```
 
 For all options that can be used when executing a test checkout the public
@@ -127,10 +136,10 @@ A quick test that does not require accessing GCS for data is:
 
 ```bash
 python3 /workspace/perfzero/lib/benchmark.py \
---git_repos="https://github.com/tensorflow/models.git" \
+--git_repos="https://github.com/tensorflow/models.git;benchmark" \
 --python_path=models \
 --gcloud_key_file_url="" \
---benchmark_methods=official.resnet.keras.keras_cifar_benchmark.Resnet56KerasBenchmarkSynth.benchmark_1_gpu_no_dist_strat
+--benchmark_methods=official.benchmark.keras_cifar_benchmark.Resnet56KerasBenchmarkSynth.benchmark_1_gpu_no_dist_strat
 ```
 
 ## PerfZero without docker
@@ -149,17 +158,17 @@ nightly build.
 
 ```bash
 python3 /workspace/perfzero/lib/benchmark.py \
---git_repos="https://github.com/tensorflow/models.git" \
+--git_repos="https://github.com/tensorflow/models.git;benchmark" \
 --python_path=models \
---data_downloads="https://www.cs.toronto.edu/~kriz/cifar-10-binary.tar.gz" \
---benchmark_methods=official.resnet.estimator_benchmark.Resnet50EstimatorBenchmarkReal.benchmark_graph_1_gpu
+--data_downloads="gs://tf-perf-imagenet-uswest1/tensorflow/cifar10_data/cifar-10-batches-bin" \
+--benchmark_methods=official.r1.resnet.estimator_benchmark.Resnet50EstimatorBenchmarkReal.benchmark_graph_1_gpu
 ```
 
 # Creating tests
 
 Here are the instructions that developers of benchmark method needs to follow in
 order to run benchmark method in PerfZero. See
-[estimator_benchmark.py](https://github.com/tensorflow/models/blob/master/official/resnet/estimator_benchmark.py)
+[estimator_benchmark.py](https://github.com/tensorflow/models/blob/master/official/r1/resnet/estimator_benchmark.py)
 for example test code that supports PerfZero.
 
 1) The benchmark class should extend the TensorFlow python class
@@ -241,9 +250,9 @@ export ROOT_DATA_DIR=/data
 nvidia-docker run -it --rm -v $(pwd):/workspace -v $ROOT_DATA_DIR:$ROOT_DATA_DIR perfzero/tensorflow \
 python3 /workspace/benchmarks/perfzero/lib/benchmark.py \
 --gcloud_key_file_url="" \
---git_repos="https://github.com/tensorflow/models.git" \
+--git_repos="https://github.com/tensorflow/models.git;benchmark" \
 --python_path=models \
---benchmark_methods=official.resnet.estimator_benchmark.Resnet50EstimatorBenchmarkSynth.benchmark_graph_1_gpu \
+--benchmark_methods=official.r1.resnet.estimator_benchmark.Resnet50EstimatorBenchmarkSynth.benchmark_graph_1_gpu \
 --root_data_dir=$ROOT_DATA_DIR
 ```
 
@@ -280,9 +289,9 @@ for instructions on how to use the generated profiler data.
 ## Instructions for managing Google Cloud Platform computing instance
 
 PerfZero aims to make it easy to run and debug TensorFlow which is usually run
-with GPU. However, most users do not have dedicated machine with the expensive
+with GPU. However, most users do not have dedicated machine with expensive
 hardware. One cost-effective solution is for users to create machine with the
-desired hardward on demand in a public cloud when they need to debug TensorFlow.
+desired hardware on demand in a public cloud when they need to debug TensorFlow.
 
 We provide a script in PerfZero to make it easy to manage computing instance in
 Google Cloud Platform. This assumes that you have access to an existing project
@@ -319,7 +328,10 @@ PerfZero outputs a json-formatted summary that provides the information needed
 to understand the benchmark result. The summary is printed in the stdout and
 in the file `path_to_perfzero/${workspace}/output/${execution_id}/perfzero.log`.
 
-Here is an example output from PerZero. Explanation is provided inline for each
+Additionally, Perfzero outputs a pure json file containing the summary at
+`path_to_perfzero/${workspace}/output/${execution_id}/perfzero_summary.json`
+
+Here is an example output from PerfZero. Explanation is provided inline for each
 key when the name of the key is not sufficiently self-explanary.
 
 ```
@@ -338,7 +350,7 @@ key when the name of the key is not sufficiently self-explanary.
     "has_exception": false,
     "site_package_info": {
       "models": {
-        "branch": "master",
+        "branch": "benchmark",
         "url": "https://github.com/tensorflow/models.git",
         "hash": "f788046ca876a8820e05b0b48c1fc2e16b0955bc"
       },
@@ -399,18 +411,39 @@ key when the name of the key is not sufficiently self-explanary.
 }
 ```
 
-### Visualize TensorFlow graph etc. using Tensorboard
+### Profiling
 
 When the flag `--profiler_enabled_time=start_time:end_time` is specified, the
 profiler data will be collected and stored in
 `path_to_perfzero/${workspace}/output/${execution_id}/profiler_data`.
 
-Run `tensorboard --logdir=perfzero/workspace/output/${execution_id}` or `python3
--m tensorboard.main --logdir=perfzero/workspace/output/${execution_id}` to open
-Tensorboard server. If PerfZero is executed on a remote machine, run `ssh -L
-6006:127.0.0.1:6006 remote_ip` before opening `http://localhost:6006` in your
-browser to access the Tensorboard UI.
+#### Visualize in TensorBoard
 
+Firstly, install the profile plugin for TensorBoard.
+```
+pip install -U tensorboard-plugin-profile
+```
+
+Run `tensorboard --logdir=path_to_perfzero/workspace/output/${execution_id}/profiler_data` or
+`python3 -m tensorboard.main --logdir=path_to_perfzero/workspace/output/${execution_id}/profiler_data` to open
+TensorBoard server.
+
+If PerfZero is executed on a remote machine, run `ssh -L
+6006:127.0.0.1:6006 remote_ip` before opening `http://localhost:6006` in your
+browser to access the TensorBoard UI.
+
+You can also run TensorBoard inside the docker, e.g.
+`tensorboard --logdir=/workspace/perfzero/workspace/output/${execution_id}/profiler_data --bind_all`
+
+In this case, you have to start docker with port mapping, i.e. with "-p 6006:6006" flag, .e.g
+```
+nvidia-docker run -it --rm -v $(pwd):/workspace -p 6006:6006 perfzero/tensorflow
+```
+
+Normally, the pages you see will look like:
+
+![Screenshot](screenshots/profiling_overview.png "Profiling Overview")
+![Screenshot](screenshots/profiling_trace_view.png "Profiling Trace View")
 
 ### Visualize system metric values over time
 
@@ -441,7 +474,7 @@ find perfzero/lib -name *.py -exec pyformat --in_place {} \;
 find perfzero/lib -name *.py -exec gpylint3 {} \;
 ```
 
-Here is the command to generate table-of-cotents for this README. Run this
+Here is the command to generate table-of-contents for this README. Run this
 command and copy/paste it to the README.md.
 
 ```

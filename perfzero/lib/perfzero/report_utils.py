@@ -15,13 +15,47 @@
 """Upload test results."""
 from __future__ import print_function
 
+import importlib
 import json
 import logging
+import os
 import perfzero.utils as utils
 import psutil
 import socket
 
 from six import u as unicode  # pylint: disable=W0622
+
+
+def execute_methods(method_names_str, *args, **kwargs):
+  """Calls a list of method names on given function params.
+
+  Args:
+    method_names_str: String - Comma-separated module.foo.bar.method strings.
+      This function imports module.foo.bar for each such method and calls it
+      with *args and **kwargs.
+    *args: Function params common to each method.
+    **kwargs: Function params common to each method.
+
+  Raises:
+    RuntimeError: If any of the invoked methods raised an exception.
+  """
+  if not method_names_str:
+    return
+  errors = []
+  module_methods_list = method_names_str.split(',')
+  for module_method in module_methods_list:
+    try:
+      logging.info('Trying to call %s', module_method)
+      module_path, method_path = module_method.rsplit('.', 1)
+      this_module = importlib.import_module(module_path)
+      logging.info('Found module %s, looking for %s', module_path, method_path)
+      this_method = getattr(this_module, method_path)
+      logging.info('Found method %s', method_path)
+      this_method(*args, **kwargs)
+    except Exception as e:  # pylint: disable=broad-except
+      errors.append(str(e))
+  if errors:
+    raise RuntimeError('\n' + '\n'.join(errors))
 
 
 def upload_execution_summary(bigquery_project_name, bigquery_dataset_table_name,
@@ -101,7 +135,7 @@ def upload_execution_summary(bigquery_project_name, bigquery_dataset_table_name,
         bigquery_project_name)
 
 
-def build_benchmark_result(raw_benchmark_result, has_exception):
+def build_benchmark_result(raw_benchmark_result, has_exception, trial_id):
   """Converts test_log.proto format to PerfZero format."""
   benchmark_result = {}
   benchmark_result['name'] = raw_benchmark_result['name']
@@ -131,6 +165,7 @@ def build_benchmark_result(raw_benchmark_result, has_exception):
   benchmark_result['succeeded'] = succeeded
   benchmark_result['extras'] = extras
   benchmark_result['metrics'] = metrics
+  benchmark_result['trial_id'] = trial_id
 
   return benchmark_result
 
@@ -139,7 +174,8 @@ def build_execution_summary(execution_timestamp, execution_id,
                             ml_framework_build_label, execution_label,
                             platform_name, system_name, output_gcs_url,
                             benchmark_result, env_vars, flags, harness_info,
-                            site_package_info, process_info, has_exception):
+                            site_package_info, process_info, has_exception,
+                            is_tpu_benchmark):
   """Builds summary of the execution."""
   # Avoids module not found during setup phase when tf is not installed yet.
   # pylint: disable=C6204
@@ -176,11 +212,14 @@ def build_execution_summary(execution_timestamp, execution_id,
     system_info['platform_name'] = platform_name
   if system_name:
     system_info['system_name'] = system_name
-  gpu_info = utils.get_gpu_info()
-  if gpu_info:
-    system_info['accelerator_driver_version'] = gpu_info['gpu_driver_version']
-    system_info['accelerator_model'] = gpu_info['gpu_model']
-    system_info['accelerator_count'] = gpu_info['gpu_count']
+  if os.getenv('TPUVM_MODE'):
+    system_info['accelerator_model'] = 'tpuvm'
+  elif not is_tpu_benchmark:
+    gpu_info = utils.get_gpu_info()
+    if gpu_info:
+      system_info['accelerator_driver_version'] = gpu_info['gpu_driver_version']
+      system_info['accelerator_model'] = gpu_info['gpu_model']
+      system_info['accelerator_count'] = gpu_info['gpu_count']
   system_info['cpu_model'] = utils.get_cpu_name()
   system_info['physical_cpu_count'] = psutil.cpu_count(logical=False)
   system_info['logical_cpu_count'] = psutil.cpu_count(logical=True)

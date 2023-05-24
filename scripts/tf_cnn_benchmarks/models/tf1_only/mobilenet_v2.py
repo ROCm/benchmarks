@@ -20,19 +20,15 @@ The base model gives 72.2% accuracy on ImageNet, with 300MMadds,
 3.4 M parameters.
 """
 
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-
 import copy
 
-import tensorflow as tf
+import tensorflow.compat.v1 as tf
 
-from models import mobilenet as lib
-from models import mobilenet_conv_blocks as ops
 from models import model
+from models.tf1_only import mobilenet as lib
+from models.tf1_only import mobilenet_conv_blocks as ops
+from tensorflow.contrib import slim
 
-slim = tf.contrib.slim
 op = lib.op
 
 expand_input = ops.expand_input_by_factor
@@ -193,6 +189,6 @@ class MobilenetModel(model.CNNModel):
         'mobilenet', 224, 32, 0.005, params=params)
 
   def add_inference(self, cnn):
-    with tf.contrib.slim.arg_scope(training_scope(is_training=cnn.phase_train)):
+    with slim.arg_scope(training_scope(is_training=cnn.phase_train)):
       cnn.top_layer, _ = mobilenet(cnn.top_layer, is_training=cnn.phase_train)
       cnn.top_size = cnn.top_layer.shape[-1].value

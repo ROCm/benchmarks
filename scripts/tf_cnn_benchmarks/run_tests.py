@@ -14,15 +14,12 @@
 # ==============================================================================
 """Runs the tf_cnn_benchmarks tests."""
 
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-
 import sys
 import unittest
 
 from absl import app
 from absl import flags as absl_flags
+import tensorflow.compat.v1 as tf
 
 import all_reduce_benchmark_test
 import allreduce_test
@@ -30,8 +27,7 @@ import benchmark_cnn_distributed_test
 import benchmark_cnn_test
 import cnn_util_test
 import variable_mgr_util_test
-from models import nasnet_test
-
+from models import model_config
 
 # Ideally, we wouldn't need this option, and run both distributed tests and non-
 # distributed tests. But, TensorFlow allocates all the GPU memory by default, so
@@ -40,32 +36,33 @@ from models import nasnet_test
 # already allocated. If a non-distributed test is run, then a distributed test
 # is run in the same process, the distributed test will fail because there is no
 # more GPU memory for the spawned processes to allocate.
-absl_flags.DEFINE_boolean('run_distributed_tests', False,
-                          'If True, run the distributed tests. If False, the'
-                          'non-distributed tests.')
+_RUN_DISTRIBUTED_TESTS = absl_flags.DEFINE_boolean(
+    'run_distributed_tests', False,
+    'If True, run the distributed tests. If False, the'
+    'non-distributed tests.')
 
-absl_flags.DEFINE_boolean('full_tests', False,
-                          'If True, all distributed or non-distributed tests '
-                          'are run, which can take hours. If False, only a '
-                          'subset of tests will be run. This subset runs much '
-                          'faster and tests almost all the functionality as '
-                          'the full set of tests, so it is recommended to keep '
-                          'this option set to False.')
-
-FLAGS = absl_flags.FLAGS
+_FULL_TESTS = absl_flags.DEFINE_boolean(
+    'full_tests', False, 'If True, all distributed or non-distributed tests '
+    'are run, which can take hours. If False, only a '
+    'subset of tests will be run. This subset runs much '
+    'faster and tests almost all the functionality as '
+    'the full set of tests, so it is recommended to keep '
+    'this option set to False.')
 
 
 def main(_):
   loader = unittest.defaultTestLoader
-  if FLAGS.full_tests:
+  if _FULL_TESTS.value:
     suite = unittest.TestSuite([
         loader.loadTestsFromModule(allreduce_test),
         loader.loadTestsFromModule(cnn_util_test),
         loader.loadTestsFromModule(variable_mgr_util_test),
         loader.loadTestsFromModule(benchmark_cnn_test),
         loader.loadTestsFromModule(all_reduce_benchmark_test),
-        loader.loadTestsFromModule(nasnet_test),
     ])
+    if model_config.can_import_contrib:
+      from models.tf1_only import nasnet_test  # pylint: disable=g-import-not-at-top
+      suite.addTest(loader.loadTestsFromModule(nasnet_test))
     dist_suite = unittest.TestSuite([
         loader.loadTestsFromModule(benchmark_cnn_distributed_test),
     ])
@@ -91,7 +88,7 @@ def main(_):
         ]),
     ])
 
-  if FLAGS.run_distributed_tests:
+  if _RUN_DISTRIBUTED_TESTS.value:
     print('Running distributed tests')
     result = unittest.TextTestRunner(verbosity=2).run(dist_suite)
   else:
@@ -101,4 +98,5 @@ def main(_):
 
 
 if __name__ == '__main__':
+  tf.disable_v2_behavior()
   app.run(main)

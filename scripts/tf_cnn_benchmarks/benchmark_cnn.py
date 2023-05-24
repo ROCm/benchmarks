@@ -17,10 +17,6 @@
 See the README for more information.
 """
 
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-
 import argparse
 from collections import namedtuple
 import contextlib
@@ -34,11 +30,9 @@ import traceback
 
 from absl import flags as absl_flags
 import numpy as np
+import tensorflow.compat.v1 as tf
 
-import six
-from six.moves import xrange  # pylint: disable=redefined-builtin
-import tensorflow as tf
-
+# pylint: disable=g-direct-tensorflow-import
 import cnn_util
 import constants
 import datasets
@@ -53,7 +47,7 @@ from google.protobuf import text_format
 from tensorflow.core.protobuf import rewriter_config_pb2
 from tensorflow.python import debug as tf_debug
 from tensorflow.python.client import timeline
-from tensorflow.python.framework import graph_util
+from tensorflow.python.framework import convert_to_constants
 from tensorflow.python.framework import graph_util_impl
 from tensorflow.python.framework import importer
 from tensorflow.python.ops import data_flow_ops
@@ -211,7 +205,7 @@ flags.DEFINE_string('resize_method', 'bilinear',
                     'a round-robin fashion. Other modes support any sizes and '
                     'apply random bbox distortions before resizing (even with '
                     'distortions=False).')
-flags.DEFINE_boolean('distortions', True,
+flags.DEFINE_boolean('distortions', False,
                      'Enable/disable distortions during image preprocessing. '
                      'These include bbox and color distortions.')
 flags.DEFINE_boolean('use_datasets', True,
@@ -240,10 +234,10 @@ flags.DEFINE_enum(
     'Network topology specifies the topology used to connect multiple devices. '
     'Network topology is used to decide the hierarchy to use for the '
     'hierarchical_copy.')
-flags.DEFINE_integer('gradient_repacking', 0, 'Use gradient repacking. It'
-                     'currently only works with replicated mode. At the end of'
-                     'of each step, it repacks the gradients for more efficient'
-                     'cross-device transportation. A non-zero value specifies'
+flags.DEFINE_integer('gradient_repacking', 0, 'Use gradient repacking. It '
+                     'currently only works with replicated mode. At the end of '
+                     'each step, it repacks the gradients for more efficient '
+                     'cross-device transportation. A non-zero value specifies '
                      'the number of split packs that will be formed.',
                      lower_bound=0)
 flags.DEFINE_boolean('compact_gradient_transfer', True, 'Compact gradient'
@@ -705,12 +699,12 @@ class GlobalStepWatcher(threading.Thread):
         # calls to print, which can break tests.
         tf.logging.info('Starting real work at step %s at time %s' %
                         (global_step_val, time.ctime()))
-        self.start_time = time.time()
+        self.start_time = time.perf_counter()
         self.start_step = global_step_val
       if self.finish_time == 0 and global_step_val >= self.end_at_global_step:
         tf.logging.info('Finishing real work at step %s at time %s' %
                         (global_step_val, time.ctime()))
-        self.finish_time = time.time()
+        self.finish_time = time.perf_counter()
         self.finish_step = global_step_val
 
   def done(self):
@@ -843,7 +837,8 @@ def benchmark_one_step(sess,
                        summary_op=None,
                        show_images_per_sec=True,
                        benchmark_logger=None,
-                       collective_graph_key=0):
+                       collective_graph_key=0,
+                       should_output_files=True):
   """Advance one step of benchmarking."""
   should_profile = profiler and 0 <= step < _NUM_STEPS_TO_PROFILE
   need_options_and_metadata = (
@@ -863,7 +858,7 @@ def benchmark_one_step(sess,
     run_options = None
     run_metadata = None
   summary_str = None
-  start_time = time.time()
+  start_time = time.perf_counter()
   if summary_op is None:
     results = sess.run(fetches, options=run_options, run_metadata=run_metadata)
   else:
@@ -876,7 +871,7 @@ def benchmark_one_step(sess,
     lossval = 0.
   if image_producer is not None:
     image_producer.notify_image_consumption()
-  train_time = time.time() - start_time
+  train_time = time.perf_counter() - start_time
   step_train_times.append(train_time)
   if (show_images_per_sec and step >= 0 and
       (step == 0 or (step + 1) % params.display_every == 0)):
@@ -902,7 +897,7 @@ def benchmark_one_step(sess,
   if need_options_and_metadata:
     if should_profile:
       profiler.add_step(step, run_metadata)
-    if trace_filename and step == -2:
+    if trace_filename and step == -2 and should_output_files:
       log_fn('Dumping trace to %s' % trace_filename)
       trace_dir = os.path.dirname(trace_filename)
       if not gfile.Exists(trace_dir):
@@ -913,7 +908,7 @@ def benchmark_one_step(sess,
           trace_file.write(trace.generate_chrome_trace_format(show_memory=True))
         else:
           trace_file.write(str(run_metadata.step_stats))
-    if partitioned_graph_file_prefix and step == -2:
+    if partitioned_graph_file_prefix and step == -2 and should_output_files:
       path, filename = os.path.split(partitioned_graph_file_prefix)
       if '.' in filename:
         base_filename, ext = filename.rsplit('.', 1)
@@ -1470,6 +1465,8 @@ class BenchmarkCNN(object):
     if use_controller and not params.controller_host:
       raise ValueError('When variable_update==distributed_all_reduce '
                        'controller_host must also be specified.')
+    self.single_session = (
+        self.params.variable_update == 'distributed_all_reduce')
     # collective_all_reduce doesn't need a controller or ps
     self.distributed_collective = (
         self.params.variable_update == 'collective_all_reduce' and
@@ -1522,7 +1519,7 @@ class BenchmarkCNN(object):
     # compute device, and never on a parameter server device.
     self.raw_devices = [
         '%s/%s:%i' % (worker_prefix, self.params.device, i)
-        for i in xrange(self.num_gpus)
+        for i in range(self.num_gpus)
     ]
 
     subset = 'validation' if params.eval else 'train'
@@ -1723,7 +1720,7 @@ class BenchmarkCNN(object):
     model_benchmark_logger = None
     if self.params.benchmark_log_dir is not None:
       try:
-        from official.utils.logs import logger as models_logger  # pylint: disable=g-import-not-at-top
+        from official.r1.utils.logs import logger as models_logger  # pylint: disable=g-import-not-at-top
       except ImportError:
         tf.logging.fatal('Please include tensorflow/models to the PYTHONPATH '
                          'in order to use BenchmarkLogger. Configured '
@@ -1743,7 +1740,7 @@ class BenchmarkCNN(object):
     self.cpu_device = '%s/cpu:0' % worker_prefix
     self.raw_devices = [
         '%s/%s:%i' % (worker_prefix, self.params.device, i)
-        for i in xrange(self.num_gpus)
+        for i in range(self.num_gpus)
     ]
     self.devices = self.variable_mgr.get_devices()
 
@@ -1755,8 +1752,8 @@ class BenchmarkCNN(object):
     else:
       return [
           'job:worker/replica:0/task%s/%s:%i' % (t, self.params.device, i)
-          for t in xrange(self.num_workers)
-          for i in xrange(self.num_gpus)
+          for t in range(self.num_workers)
+          for i in range(self.num_gpus)
       ]
 
   def print_info(self):
@@ -1981,7 +1978,7 @@ class BenchmarkCNN(object):
             self.params.use_python32_barrier)
         image_producer.start()
       if enqueue_ops:
-        for i in xrange(len(enqueue_ops)):
+        for i in range(len(enqueue_ops)):
           sess.run(enqueue_ops[:(i + 1)])
           if image_producer is not None:
             image_producer.notify_image_consumption()
@@ -1993,13 +1990,13 @@ class BenchmarkCNN(object):
     with self._do_eval():
       mlperf.logger.log_eval_epoch(
           mlperf.tags.EVAL_START, global_step, self.batch_size)
-      loop_start_time = start_time = time.time()
+      loop_start_time = start_time = time.perf_counter()
       # TODO(laigd): refactor the part to compute/report the accuracy. Currently
       # it only works for image models.
       top_1_accuracy_sum = 0.0
       top_5_accuracy_sum = 0.0
       total_eval_count = self.num_batches * self.batch_size
-      for step in xrange(self.num_batches):
+      for step in range(self.num_batches):
         if (summary_writer and self.params.save_summaries_steps > 0 and
             (step + 1) % self.params.save_summaries_steps == 0):
           results, summary_str = sess.run([fetches, summary_op])
@@ -2012,14 +2009,14 @@ class BenchmarkCNN(object):
         top_1_accuracy_sum += results['top_1_accuracy']
         top_5_accuracy_sum += results['top_5_accuracy']
         if (step + 1) % self.params.display_every == 0:
-          duration = time.time() - start_time
+          duration = time.perf_counter() - start_time
           examples_per_sec = (
               self.batch_size * self.params.display_every / duration)
           log_fn('%i\t%.1f examples/sec' % (step + 1, examples_per_sec))
-          start_time = time.time()
+          start_time = time.perf_counter()
         if image_producer is not None:
           image_producer.notify_image_consumption()
-      loop_end_time = time.time()
+      loop_end_time = time.perf_counter()
       accuracy_at_1 = top_1_accuracy_sum / self.num_batches
       accuracy_at_5 = top_5_accuracy_sum / self.num_batches
       summary = tf.Summary()
@@ -2100,12 +2097,10 @@ class BenchmarkCNN(object):
       A namedtuple containing the ops/tensors that required by
       _benchmark_graph().
     """
-    if self.params.variable_update == 'distributed_all_reduce':
-      self.single_session = True
+    if self.single_session:
       (input_producer_op, enqueue_ops, fetches) = (
           self._build_model_single_session())
     else:
-      self.single_session = False
       (input_producer_op, enqueue_ops, fetches) = self._build_model()
     fetches_list = nest.flatten(list(fetches.values()))
     main_fetch_group = tf.group(*fetches_list, name='main_fetch_group')
@@ -2337,7 +2332,7 @@ class BenchmarkCNN(object):
           self.params.use_python32_barrier)
       image_producer.start()
     if graph_info.enqueue_ops:
-      for i in xrange(len(graph_info.enqueue_ops)):
+      for i in range(len(graph_info.enqueue_ops)):
         sess.run(graph_info.enqueue_ops[:(i + 1)])
         if image_producer is not None:
           image_producer.notify_image_consumption()
@@ -2392,7 +2387,7 @@ class BenchmarkCNN(object):
     accuracy_at_1 = None
     accuracy_at_5 = None
     last_eval_step = local_step
-    loop_start_time = time.time()
+    loop_start_time = time.perf_counter()
     last_average_loss = None
     while not done_fn():
       if local_step == 0:
@@ -2411,7 +2406,7 @@ class BenchmarkCNN(object):
         assert len(step_train_times) == self.num_warmup_batches
         # reset times to ignore warm up batch
         step_train_times = []
-        loop_start_time = time.time()
+        loop_start_time = time.perf_counter()
       if (summary_writer and
           (local_step + 1) % self.params.save_summaries_steps == 0):
         fetch_summary = graph_info.summary_op
@@ -2426,7 +2421,9 @@ class BenchmarkCNN(object):
           self.trace_filename, self.params.partitioned_graph_file_prefix,
           profiler, image_producer, self.params, fetch_summary,
           benchmark_logger=self.benchmark_logger,
-          collective_graph_key=collective_graph_key)
+          collective_graph_key=collective_graph_key,
+          should_output_files=(self.params.variable_update != 'horovod' or
+                               is_chief))
       if summary_str is not None and is_chief:
         supervisor.summary_computed(sess, summary_str)
       local_step += 1
@@ -2466,7 +2463,7 @@ class BenchmarkCNN(object):
         log_fn('Stopping, as the model indicates its custom goal was reached')
         skip_final_eval = True
         break
-    loop_end_time = time.time()
+    loop_end_time = time.perf_counter()
     # Waits for the global step to be done, regardless of done_fn.
     if global_step_watcher:
       while not global_step_watcher.done():
@@ -2613,7 +2610,7 @@ class BenchmarkCNN(object):
       with tf.Session(config=create_config_proto(self.params)) as sess:
         sess.run(tf.global_variables_initializer())
         sess.run(tf.local_variables_initializer())
-        graphdef = graph_util.convert_variables_to_constants(
+        graphdef = convert_to_constants.convert_variables_to_constants(
             sess,
             graphdef,
             output_node_names,
@@ -2625,7 +2622,7 @@ class BenchmarkCNN(object):
     if self.params.trt_mode:
       # Import here instead of at top, because this will crash if TensorRT is
       # not installed
-      from tensorflow.contrib import tensorrt as trt  # pylint: disable=g-import-not-at-top
+      from tensorflow.python.compiler.tensorrt import trt_convert  # pylint: disable=g-import-not-at-top
       # Avoid TF-TRT bridge from touching all variable initializer ops and their
       # dependencies, since they can directly be fetched by sess.run()s that
       # initialize the variables.
@@ -2636,7 +2633,7 @@ class BenchmarkCNN(object):
           variable_initializers, name_to_input_name)
       # pylint: enable=protected-access
 
-      graphdef = trt.create_inference_graph(
+      graphdef = trt_convert.create_inference_graph(
           graphdef,
           outputs=output_node_names + list(initializer_subgraph_ops),
           max_batch_size=self.model.get_batch_size(),
@@ -2745,7 +2742,7 @@ class BenchmarkCNN(object):
             shared_name='input_producer_staging_area_%d_eval_%s' %
             (device_num, self._doing_eval))
         input_producer_stages.append(staging_area)
-        for group_index in xrange(self.batch_group_size):
+        for group_index in range(self.batch_group_size):
           batch_index = group_index + device_num * self.batch_group_size
           put_op = staging_area.put(
               [parts[batch_index] for parts in input_list])
@@ -2864,7 +2861,8 @@ class BenchmarkCNN(object):
       if self.variable_mgr.supports_staged_vars():
         for staging_ops in self.variable_mgr.staging_vars_on_devices:
           gpu_compute_stage_ops.extend(
-              [put_op for _, (put_op, _) in six.iteritems(staging_ops)])
+              [put_op for _, (put_op, _) in staging_ops.items()]
+          )
       enqueue_ops.append(tf.group(*gpu_compute_stage_ops,
                                   name='gpu_compute_stage_ops_group'))
       if gpu_grad_stage_ops:
@@ -2902,7 +2900,10 @@ class BenchmarkCNN(object):
         key = name[len(constants.UNREDUCED_ACCURACY_OP_PREFIX):]
         fetches[key] = tf.concat(ops, 0)
       else:
-        fetches[name] = tf.reduce_sum(ops) / self.batch_size
+        fetches[name] = (
+            tf.reduce_sum(ops) /
+            (self.batch_size *
+             (self.num_workers if self.single_session else 1)))
         if self.task_index == 0 and self.params.summary_verbosity >= 1:
           tf.summary.scalar(name, fetches[name])
 
