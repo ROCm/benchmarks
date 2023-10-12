@@ -373,7 +373,7 @@ flags.DEFINE_integer('gpu_kt_max_pending', 0,
                      'outstanding at any time.  When this limit is reached '
                      'launch of additional kernels will stall until an '
                      'outstanding event completes.')
-flags.DEFINE_boolean('use_tf_layers', True,
+flags.DEFINE_boolean('use_tf_layers', False,
                      'If True, use tf.layers for neural network layers. This '
                      'should not affect performance or accuracy in any way.')
 flags.DEFINE_integer('tf_random_seed', 1234,
