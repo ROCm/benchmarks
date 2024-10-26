@@ -32,7 +32,8 @@ References:
 """
 
 import numpy as np
-import tensorflow.compat.v1 as tf
+#import tensorflow.compat.v1 as tf
+import tensorflow._api.v2.compat.v1 as tf
 import datasets
 import mlperf
 from models import model as model_lib

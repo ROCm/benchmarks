@@ -19,7 +19,7 @@ import contextlib
 
 import numpy as np
 
-import tensorflow.compat.v1 as tf
+import tensorflow._api.v2.compat.v1 as tf
 
 # pylint: disable=g-direct-tensorflow-import
 import mlperf
@@ -466,15 +466,12 @@ class ConvNetBuilder(object):
             momentum=decay,
             scale=scale,
             epsilon=epsilon,
-            fused=True,
             axis=_data_format_to_channel_axis[self.data_format],
             # We pass this 'scope' argument for compatibility with checkpoints
             # created with the contrib version of batch norm. tf_cnn_benchmarks
             # used to use the contrib version.
-            _scope=scope,
-            center=center,
-            name=scope.name)
-        bn = layer_obj.apply(input_layer, training=self.phase_train)
+            center=center)
+        bn = layer_obj(input_layer, training=self.phase_train)
       else:
         bn = self._batch_norm_without_layers(input_layer, decay, scale, epsilon)
     self.top_layer = bn
