@@ -124,10 +124,11 @@ class ConvNetBuilder(object):
   def _conv2d_impl(self, input_layer, num_channels_in, filters, kernel_size,
                    strides, padding, kernel_initializer):
     if self.use_tf_layers:
-      return conv_layers.conv2d(input_layer, filters, kernel_size, strides,
-                                padding, self.channel_pos,
-                                kernel_initializer=kernel_initializer,
-                                use_bias=False)
+      out = conv_layers.conv2d(input_layer, filters, kernel_size, strides,
+                               padding, self.channel_pos,
+                               kernel_initializer=kernel_initializer,
+                               use_bias=False)
+      return tf.cast(out, self.dtype)
     else:
       weights_shape = [kernel_size[0], kernel_size[1], num_channels_in, filters]
       # We use the name 'conv2d/kernel' so the variable has the same name as its
@@ -233,9 +234,9 @@ class ConvNetBuilder(object):
         conv1 = tf.nn.tanh(biased)
       else:
         raise KeyError('Invalid activation type \'%s\'' % activation)
-      self.top_layer = conv1
+      self.top_layer = tf.cast(conv1, self.dtype)
       self.top_size = num_out_channels
-      return conv1
+      return self.top_layer
 
   def _pool(self,
             pool_name,
