@@ -16,7 +16,8 @@
 
 from collections import namedtuple
 
-import tensorflow.compat.v1 as tf
+# import tensorflow.compat.v1 as tf
+import tensorflow._api.v2.compat.v1 as tf
 
 import convnet_builder
 import mlperf
@@ -245,7 +246,7 @@ class CNNModel(Model):
         mean=127,
         stddev=60,
         name=self.model_name + '_synthetic_inputs')
-    inputs = variables_module.VariableV1(
+    inputs = tf.Variable(
         inputs, trainable=False, collections=[tf.GraphKeys.LOCAL_VARIABLES],
         name=input_name)
     labels = tf.random_uniform(
