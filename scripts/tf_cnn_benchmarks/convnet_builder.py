@@ -19,7 +19,7 @@ import contextlib
 
 import numpy as np
 
-import tensorflow._api.v2.compat.v1 as tf
+import tensorflow.compat.v1 as tf
 
 # pylint: disable=g-direct-tensorflow-import
 import mlperf
